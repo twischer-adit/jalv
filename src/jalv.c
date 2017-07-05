@@ -765,10 +765,13 @@ signal_handler(int ignored)
 	zix_sem_post(&exit_sem);
 }
 
+
+static Jalv jalv;
+
 int
-main(int argc, char** argv)
+jalv_open(int argc, char** argv)
 {
-	Jalv jalv;
+
 	memset(&jalv, '\0', sizeof(Jalv));
 	jalv.prog_name     = argv[0];
 	jalv.block_length  = 4096;  /* Should be set by backend */
@@ -1158,11 +1161,12 @@ main(int argc, char** argv)
 	jalv_backend_activate(&jalv);
 	jalv.play_state = JALV_RUNNING;
 
-	/* Run UI (or prompt at console) */
-	jalv_open_ui(&jalv);
+	return 0;
+}
 
-	/* Wait for finish signal from UI or signal handler */
-	zix_sem_wait(&exit_sem);
+int
+jalv_close()
+{
 	jalv.exit = true;
 
 	fprintf(stderr, "Exiting...\n");
@@ -1197,7 +1201,7 @@ main(int argc, char** argv)
 	sratom_free(jalv.sratom);
 	sratom_free(jalv.ui_sratom);
 	lilv_uis_free(jalv.uis);
-	lilv_world_free(world);
+	lilv_world_free(jalv.world);
 
 	zix_sem_destroy(&exit_sem);
 
@@ -1206,4 +1210,22 @@ main(int argc, char** argv)
 	free(jalv.ui_event_buf);
 
 	return 0;
+}
+
+
+int
+main(int argc, char** argv)
+{
+	const int err = jalv_open(argc, argv);
+	if (err < 0) {
+		return err;
+	}
+
+	/* Run UI (or prompt at console) */
+	jalv_open_ui(&jalv);
+
+	/* Wait for finish signal from UI or signal handler */
+	zix_sem_wait(&exit_sem);
+
+	return jalv_close();
 }

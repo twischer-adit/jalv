@@ -476,3 +476,30 @@ jalv_backend_activate_port(Jalv* jalv, uint32_t port_index)
 	}
 #endif
 }
+
+int
+jack_initialize (jack_client_t *client, const char *load_init)
+{
+	// TODO jalv->backend->client = client;
+	printf("JALV args %s\n", load_init);
+
+	char args[JACK_LOAD_INIT_LIMIT];
+	// TODO load_init has possibly to be splitted in separate array entries after each space
+	strncpy(args, load_init, sizeof(args));
+
+	char* argv[] = {
+		"jack-jalv",
+		args
+		};
+	const int argc = (sizeof(argv) / sizeof(argv[0]));
+	return jalv_open(argc, argv);
+}
+
+void
+jack_finish (void *arg)
+{
+	const int err = jalv_close();
+	if (err < 0) {
+		// TODO err
+	}
+}
