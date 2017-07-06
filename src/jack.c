@@ -318,44 +318,56 @@ jalv_backend_init(Jalv* jalv)
 {
 	jack_client_t* client = NULL;
 
-	/* Determine the name of the JACK client */
-	char* jack_name = NULL;
-	if (jalv->opts.name) {
-		/* Name given on command line */
-		jack_name = jalv_strdup(jalv->opts.name);
+	/* If the backend is already allocated
+	 * also the client should be available
+	 * becasue it is used as an internal JACK client
+	 */
+	if (jalv->backend != NULL) {
+		client = jalv->backend->client;
 	} else {
-		/* Use plugin name */
-		LilvNode* name = lilv_plugin_get_name(jalv->plugin);
-		jack_name = jalv_strdup(lilv_node_as_string(name));
-		lilv_node_free(name);
-	}
+		/* Determine the name of the JACK client */
+		char* jack_name = NULL;
+		if (jalv->opts.name) {
+			/* Name given on command line */
+			jack_name = jalv_strdup(jalv->opts.name);
+		} else {
+			/* Use plugin name */
+			LilvNode* name = lilv_plugin_get_name(jalv->plugin);
+			jack_name = jalv_strdup(lilv_node_as_string(name));
+			lilv_node_free(name);
+		}
 
-	/* Truncate client name to suit JACK if necessary */
-	if (strlen(jack_name) >= (unsigned)jack_client_name_size() - 1) {
-		jack_name[jack_client_name_size() - 1] = '\0';
-	}
-	printf("JACK Name:    %s\n", jack_name);
+		/* Truncate client name to suit JACK if necessary */
+		if (strlen(jack_name) >= (unsigned)jack_client_name_size() - 1) {
+			jack_name[jack_client_name_size() - 1] = '\0';
+		}
+		printf("JACK Name:    %s\n", jack_name);
 
-	/* Connect to JACK */
+		/* Connect to JACK */
 #ifdef JALV_JACK_SESSION
-	if (jalv->opts.uuid) {
-		client = jack_client_open(
-			jack_name,
-			(jack_options_t)(JackSessionID |
-			                 (jalv->opts.name_exact ? JackUseExactName : 0)),
-			NULL,
-			jalv->opts.uuid);
-	}
+		if (jalv->opts.uuid) {
+			client = jack_client_open(
+				jack_name,
+				(jack_options_t)(JackSessionID |
+								 (jalv->opts.name_exact ? JackUseExactName : 0)),
+				NULL,
+				jalv->opts.uuid);
+		}
 #endif
 
-	if (!client) {
-		client = jack_client_open(
-			jack_name,
-			(jalv->opts.name_exact ? JackUseExactName : JackNullOption),
-			NULL);
+		if (!client) {
+			client = jack_client_open(
+				jack_name,
+				(jalv->opts.name_exact ? JackUseExactName : JackNullOption),
+				NULL);
+		}
+
+		free(jack_name);
 	}
 
-	free(jack_name);
+	/* independed of internal or external JACK client
+	 * The opening should be done on this position
+	 */
 	if (!client) {
 		return NULL;
 	}
@@ -379,10 +391,16 @@ jalv_backend_init(Jalv* jalv)
 	jack_set_session_callback(client, &jack_session_cb, arg);
 #endif
 
-	/* Allocate and return opaque backend */
-	JalvBackend* backend = (JalvBackend*)calloc(1, sizeof(JalvBackend));
-	backend->client = client;
-	return backend;
+	if (jalv->backend == NULL) {
+		/* external JACK client */
+		/* Allocate and return opaque backend */
+		JalvBackend* backend = (JalvBackend*)calloc(1, sizeof(JalvBackend));
+		backend->client = client;
+		return backend;
+	} else {
+		/* internal JACK client */
+		return jalv->backend;
+	}
 }
 
 void
@@ -480,7 +498,16 @@ jalv_backend_activate_port(Jalv* jalv, uint32_t port_index)
 int
 jack_initialize (jack_client_t *client, const char *load_init)
 {
-	// TODO jalv->backend->client = client;
+	static Jalv jalv;
+	memset(&jalv, '\0', sizeof(Jalv));
+
+	/* backend is not yet allocated and has to be allocated */
+	jalv.backend = (JalvBackend*)calloc(1, sizeof(JalvBackend));
+	if (jalv.backend == NULL) {
+		return -1;
+	}
+	jalv.backend->client = client;
+
 	printf("JALV args %s\n", load_init);
 
 	char args[JACK_LOAD_INIT_LIMIT];
@@ -492,14 +519,19 @@ jack_initialize (jack_client_t *client, const char *load_init)
 		args
 		};
 	const int argc = (sizeof(argv) / sizeof(argv[0]));
-	return jalv_open(argc, argv);
+	return jalv_open(&jalv, argc, argv);
 }
 
 void
 jack_finish (void *arg)
 {
-	const int err = jalv_close();
-	if (err < 0) {
-		// TODO err
+	// TODO jalv has to be set to jack args
+	Jalv* const jalv = (Jalv*)arg;
+
+	if (arg != NULL) {
+		const int err = jalv_close(jalv);
+		if (err < 0) {
+			// TODO err
+		}
 	}
 }

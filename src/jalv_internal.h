@@ -322,13 +322,13 @@ struct Jalv {
 };
 
 int
-jalv_open(int argc, char** argv);
+jalv_open(Jalv * const jalv, int argc, char** argv);
 
 int
 jalv_init(int* argc, char*** argv, JalvOptions* opts);
 
 int
-jalv_close();
+jalv_close(Jalv * const jalv);
 
 JalvBackend*
 jalv_backend_init(Jalv* jalv);
