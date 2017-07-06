@@ -28,6 +28,7 @@
 
 struct JalvBackend {
 	jack_client_t* client;  ///< Jack client
+	bool is_internal_client;
 };
 
 /** Jack buffer size callback. */
@@ -396,9 +397,14 @@ jalv_backend_init(Jalv* jalv)
 		/* Allocate and return opaque backend */
 		JalvBackend* backend = (JalvBackend*)calloc(1, sizeof(JalvBackend));
 		backend->client = client;
+		backend->is_internal_client = false;
 		return backend;
 	} else {
-		/* internal JACK client */
+		/* internal JACK client
+		 * jalv->backend->is_internal_client = true;
+		 * was already set in jack_initialize()
+		 * when allocating the backend memory
+		 */
 		return jalv->backend;
 	}
 }
@@ -406,7 +412,10 @@ jalv_backend_init(Jalv* jalv)
 void
 jalv_backend_close(Jalv* jalv)
 {
-	jack_client_close(jalv->backend->client);
+	if (!jalv->backend->is_internal_client) {
+		jack_client_close(jalv->backend->client);
+	}
+
 	free(jalv->backend);
 	jalv->backend = NULL;
 }
@@ -507,6 +516,7 @@ jack_initialize (jack_client_t *client, const char *load_init)
 		return -1;
 	}
 	jalv.backend->client = client;
+	jalv.backend->is_internal_client = true;
 
 	printf("JALV args %s\n", load_init);
 
