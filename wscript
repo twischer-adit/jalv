@@ -175,6 +175,7 @@ def build(bld):
               lib          = ['pthread'],
               install_path = '${LIBDIR}/jack')
         autowaf.use_lib(bld, obj, libs)
+        obj.env.cshlib_PATTERN = '%s.so'
     elif bld.env.HAVE_PORTAUDIO:
         source += 'src/portaudio.c'
 
