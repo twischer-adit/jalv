@@ -510,28 +510,57 @@ jack_initialize (jack_client_t *client, const char *load_init)
 
 	printf("JALV args %s\n", load_init);
 
-	char args[JACK_LOAD_INIT_LIMIT];
-	// TODO load_init has possibly to be splitted in separate array entries after each space
+	/* copy the init string becasue it will be manipulated by strtok() */
+	const size_t args_length = strlen(load_init) + 1;
+	char args[args_length];
 	strncpy(args, load_init, sizeof(args));
+	args[sizeof(args)-1] = '\0';
 
-	char* argv[] = {
-		"jack-jalv",
-		args
-		};
-	const int argc = (sizeof(argv) / sizeof(argv[0]));
+	const char delimiters[] = " \t";
+	const int delimiter_count = sizeof(delimiters) - 1;
+
+	/* count the number of delimiters to find the worst case size of argv */
+	int delimiter_occurrence = 0;
+	for (int i=0; i<args_length; i++) {
+		for (int k=0; k<delimiter_count; k++) {
+			if (args[i] == delimiters[k]) {
+				delimiter_occurrence++;
+			}
+		}
+	}
+
+	/* Two additional arguments are required compared to the delimiter count
+	 * One is the first arguemnt which represense the process name and
+	 * the second one is required because a delimiter separates always two arguments
+	 */
+	const size_t argc_max = delimiter_occurrence + 2;
+	char* argv[argc_max];
+
+	int argc = 0;
+	/* add a dummy process name to the arguments */
+	argv[argc++] = "jack-jalv";
+
+	char* arg = strtok(args, delimiters);
+	while (arg != NULL) {
+		argv[argc++] = arg;
+		arg = strtok(NULL, delimiters);
+
+		assert(argc <= argc_max);
+	}
+
+
 	return jalv_open(&jalv, argc, argv);
 }
 
 void
 jack_finish (void *arg)
 {
-	// TODO jalv has to be set to jack args
 	Jalv* const jalv = (Jalv*)arg;
 
 	if (arg != NULL) {
 		const int err = jalv_close(jalv);
 		if (err < 0) {
-			// TODO err
+			fprintf(stderr, "Failed to close JALV\n");
 		}
 	}
 }
