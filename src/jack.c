@@ -28,6 +28,7 @@
 
 struct JalvBackend {
 	jack_client_t* client;  ///< Jack client
+	bool is_internal_client;
 };
 
 /** Jack buffer size callback. */
@@ -318,44 +319,56 @@ jalv_backend_init(Jalv* jalv)
 {
 	jack_client_t* client = NULL;
 
-	/* Determine the name of the JACK client */
-	char* jack_name = NULL;
-	if (jalv->opts.name) {
-		/* Name given on command line */
-		jack_name = jalv_strdup(jalv->opts.name);
+	/* If the backend is already allocated
+	 * also the client should be available
+	 * becasue it is used as an internal JACK client
+	 */
+	if (jalv->backend != NULL) {
+		client = jalv->backend->client;
 	} else {
-		/* Use plugin name */
-		LilvNode* name = lilv_plugin_get_name(jalv->plugin);
-		jack_name = jalv_strdup(lilv_node_as_string(name));
-		lilv_node_free(name);
-	}
+		/* Determine the name of the JACK client */
+		char* jack_name = NULL;
+		if (jalv->opts.name) {
+			/* Name given on command line */
+			jack_name = jalv_strdup(jalv->opts.name);
+		} else {
+			/* Use plugin name */
+			LilvNode* name = lilv_plugin_get_name(jalv->plugin);
+			jack_name = jalv_strdup(lilv_node_as_string(name));
+			lilv_node_free(name);
+		}
 
-	/* Truncate client name to suit JACK if necessary */
-	if (strlen(jack_name) >= (unsigned)jack_client_name_size() - 1) {
-		jack_name[jack_client_name_size() - 1] = '\0';
-	}
-	printf("JACK Name:    %s\n", jack_name);
+		/* Truncate client name to suit JACK if necessary */
+		if (strlen(jack_name) >= (unsigned)jack_client_name_size() - 1) {
+			jack_name[jack_client_name_size() - 1] = '\0';
+		}
+		printf("JACK Name:    %s\n", jack_name);
 
-	/* Connect to JACK */
+		/* Connect to JACK */
 #ifdef JALV_JACK_SESSION
-	if (jalv->opts.uuid) {
-		client = jack_client_open(
-			jack_name,
-			(jack_options_t)(JackSessionID |
-			                 (jalv->opts.name_exact ? JackUseExactName : 0)),
-			NULL,
-			jalv->opts.uuid);
-	}
+		if (jalv->opts.uuid) {
+			client = jack_client_open(
+				jack_name,
+				(jack_options_t)(JackSessionID |
+								 (jalv->opts.name_exact ? JackUseExactName : 0)),
+				NULL,
+				jalv->opts.uuid);
+		}
 #endif
 
-	if (!client) {
-		client = jack_client_open(
-			jack_name,
-			(jalv->opts.name_exact ? JackUseExactName : JackNullOption),
-			NULL);
+		if (!client) {
+			client = jack_client_open(
+				jack_name,
+				(jalv->opts.name_exact ? JackUseExactName : JackNullOption),
+				NULL);
+		}
+
+		free(jack_name);
 	}
 
-	free(jack_name);
+	/* independed of internal or external JACK client
+	 * The opening should be done on this position
+	 */
 	if (!client) {
 		return NULL;
 	}
@@ -379,16 +392,30 @@ jalv_backend_init(Jalv* jalv)
 	jack_set_session_callback(client, &jack_session_cb, arg);
 #endif
 
-	/* Allocate and return opaque backend */
-	JalvBackend* backend = (JalvBackend*)calloc(1, sizeof(JalvBackend));
-	backend->client = client;
-	return backend;
+	if (jalv->backend == NULL) {
+		/* external JACK client */
+		/* Allocate and return opaque backend */
+		JalvBackend* backend = (JalvBackend*)calloc(1, sizeof(JalvBackend));
+		backend->client = client;
+		backend->is_internal_client = false;
+		return backend;
+	} else {
+		/* internal JACK client
+		 * jalv->backend->is_internal_client = true;
+		 * was already set in jack_initialize()
+		 * when allocating the backend memory
+		 */
+		return jalv->backend;
+	}
 }
 
 void
 jalv_backend_close(Jalv* jalv)
 {
-	jack_client_close(jalv->backend->client);
+	if (!jalv->backend->is_internal_client) {
+		jack_client_close(jalv->backend->client);
+	}
+
 	free(jalv->backend);
 	jalv->backend = NULL;
 }
@@ -475,4 +502,75 @@ jalv_backend_activate_port(Jalv* jalv, uint32_t port_index)
 		lilv_node_free(name);
 	}
 #endif
+}
+
+int
+jack_initialize (jack_client_t *client, const char *load_init)
+{
+	static Jalv jalv;
+	memset(&jalv, '\0', sizeof(Jalv));
+
+	/* backend is not yet allocated and has to be allocated */
+	jalv.backend = (JalvBackend*)calloc(1, sizeof(JalvBackend));
+	if (jalv.backend == NULL) {
+		return -1;
+	}
+	jalv.backend->client = client;
+	jalv.backend->is_internal_client = true;
+
+	printf("JALV args %s\n", load_init);
+
+	/* copy the init string becasue it will be manipulated by strtok() */
+	const size_t args_length = strlen(load_init) + 1;
+	char args[args_length];
+	strncpy(args, load_init, sizeof(args));
+	args[sizeof(args)-1] = '\0';
+
+	const char delimiters[] = " \t";
+	const int delimiter_count = sizeof(delimiters) - 1;
+
+	/* count the number of delimiters to find the worst case size of argv */
+	int delimiter_occurrence = 0;
+	for (int i=0; i<args_length; i++) {
+		for (int k=0; k<delimiter_count; k++) {
+			if (args[i] == delimiters[k]) {
+				delimiter_occurrence++;
+			}
+		}
+	}
+
+	/* Two additional arguments are required compared to the delimiter count
+	 * One is the first arguemnt which represense the process name and
+	 * the second one is required because a delimiter separates always two arguments
+	 */
+	const size_t argc_max = delimiter_occurrence + 2;
+	char* argv[argc_max];
+
+	int argc = 0;
+	/* add a dummy process name to the arguments */
+	argv[argc++] = "jack-jalv";
+
+	char* arg = strtok(args, delimiters);
+	while (arg != NULL) {
+		argv[argc++] = arg;
+		arg = strtok(NULL, delimiters);
+
+		assert(argc <= argc_max);
+	}
+
+
+	return jalv_open(&jalv, argc, argv);
+}
+
+void
+jack_finish (void *arg)
+{
+	Jalv* const jalv = (Jalv*)arg;
+
+	if (arg != NULL) {
+		const int err = jalv_close(jalv);
+		if (err < 0) {
+			fprintf(stderr, "Failed to close JALV\n");
+		}
+	}
 }
